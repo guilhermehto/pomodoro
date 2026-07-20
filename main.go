@@ -537,7 +537,8 @@ func (m model) View() string {
 		Render(inner)
 }
 
-// audioStatus renders the one-line visualizer state below the key hints.
+// audioStatus renders visualizer problems below the key hints; healthy
+// capture shows nothing (the bars speak for themselves).
 func (m model) audioStatus() string {
 	switch {
 	case m.audioErr != "":
@@ -546,9 +547,6 @@ func (m model) audioStatus() string {
 	case m.capturing && !m.permOK:
 		return lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).
 			Render("♪ no signal - denied the permission? System Settings -> Privacy & Security -> Screen & System Audio Recording")
-	case m.capturing:
-		return lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).
-			Render("♪ listening · system audio")
 	default:
 		return ""
 	}

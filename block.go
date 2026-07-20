@@ -181,7 +181,7 @@ func (m model) blockStatus() string {
 			Render("block: " + m.blockErr)
 	case m.blocked:
 		return lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).
-			Render("⛔ distracting sites blocked")
+			Render("blocking sites")
 	default:
 		return ""
 	}
