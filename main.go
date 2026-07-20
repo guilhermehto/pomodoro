@@ -132,6 +132,10 @@ type model struct {
 	bands     chan audioFrame
 	cancel    context.CancelFunc
 	audioErr  string
+	// focus site blocking (macOS, /etc/hosts)
+	blocklist []string
+	blocked   bool
+	blockErr  string
 }
 
 type tickMsg time.Time
@@ -308,6 +312,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.String() == "ctrl+c" {
 			m.save() // before stopCapture: save records the live visualizer state
 			m.stopCapture()
+			m.stopBlock()
 			return m, tea.Quit
 		}
 		if m.input {
@@ -322,6 +327,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "q", "esc":
 			m.save()
 			m.stopCapture()
+			m.stopBlock()
 			return m, tea.Quit
 		case " ", "enter":
 			switch m.status {
@@ -332,13 +338,18 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case completed:
 				m.startPhase(m.next())
 			}
+			if m.ph == focus && m.status == running {
+				m.startBlock()
+			}
 		case "s": // skip current phase
 			m.ph = m.next()
 			m.remaining = m.dur(m.ph)
 			m.status = idle
+			m.stopBlock()
 		case "r": // reset current phase
 			m.remaining = m.dur(m.ph)
 			m.status = idle
+			m.stopBlock()
 		case "t": // toggle task view
 			m.view = viewTasks
 			m.reloadTasks()
@@ -403,6 +414,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // complete records a finished phase and parks in the completed state.
 func (m *model) complete() {
 	if m.ph == focus {
+		m.stopBlock()
 		m.cycle++
 		m.rollDate()
 		m.stats.Total++
@@ -511,6 +523,9 @@ func (m model) View() string {
 	}
 
 	parts = append(parts, "", dots, "", statLine, "", keys, m.audioStatus())
+	if bs := m.blockStatus(); bs != "" {
+		parts = append(parts, bs)
+	}
 
 	body := lipgloss.JoinVertical(lipgloss.Center, parts...)
 
@@ -808,6 +823,7 @@ func (m *model) rollDate() {
 type persisted struct {
 	Stats       stats               `json:"stats"`
 	Links       map[string]taskLink `json:"links"`
+	Blocklist   []string            `json:"blocklist,omitempty"`
 	Session     *session            `json:"session,omitempty"`
 	CurrentUUID string              `json:"current_uuid,omitempty"`
 	CurrentDesc string              `json:"current_desc,omitempty"`
@@ -856,7 +872,7 @@ func decodeState(data []byte) persisted {
 
 func (m model) save() {
 	p := persisted{
-		Stats: m.stats, Links: m.links,
+		Stats: m.stats, Links: m.links, Blocklist: m.blocklist,
 		CurrentUUID: m.curUUID, CurrentDesc: m.curDesc,
 		Visualizer: m.capturing, AudioPerm: m.permOK,
 	}
@@ -894,7 +910,18 @@ func main() {
 	work := flag.Int("work", 25, "focus minutes")
 	short := flag.Int("short", 5, "short break minutes")
 	long := flag.Int("long", 15, "long break minutes")
+	block := flag.String("block", "", "comma-separated sites to block during focus (persisted; -block '' clears)")
+	setup := flag.Bool("setup-block", false, "install the passwordless hosts-block helper (asks for sudo once)")
 	flag.Parse()
+
+	if *setup {
+		if err := setupBlock(); err != nil {
+			fmt.Fprintln(os.Stderr, "setup failed:", err)
+			os.Exit(1)
+		}
+		fmt.Println("hosts-block helper installed; focus blocking is now prompt-free")
+		return
+	}
 
 	p := load()
 	m := model{
@@ -907,6 +934,19 @@ func main() {
 	}
 	m.remaining = m.dur(focus)
 	m.restore(p)
+	m.blocklist = p.Blocklist
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name != "block" {
+			return
+		}
+		m.blocklist = nil
+		for _, d := range strings.Split(*block, ",") {
+			if d = strings.TrimSpace(d); d != "" {
+				m.blocklist = append(m.blocklist, d)
+			}
+		}
+	})
+	unblockStale() // crash leftovers: tagged /etc/hosts entries with no focus behind them
 
 	if _, err := tea.NewProgram(&m, tea.WithAltScreen()).Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
