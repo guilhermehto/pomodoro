@@ -75,6 +75,28 @@ type stats struct {
 	Date  string `json:"date"` // YYYY-MM-DD
 }
 
+// taskLink is the local pomodoro↔task association (never written back to
+// Taskwarrior — a task can outlive its pending state, so we cache Description).
+type taskLink struct {
+	Description string `json:"description"`
+	Pomodoros   int    `json:"pomodoros"`
+	LastWorked  string `json:"last_worked"` // YYYY-MM-DD
+}
+
+type viewMode int
+
+const (
+	viewTimer viewMode = iota
+	viewTasks
+)
+
+type inputKind int
+
+const (
+	inputAdd inputKind = iota
+	inputEdit
+)
+
 type model struct {
 	width, height int
 
@@ -87,6 +109,20 @@ type model struct {
 
 	durations [3]time.Duration
 	stats     stats
+
+	// taskwarrior
+	view       viewMode
+	tasks      []twTask
+	taskCursor int
+	curUUID    string // current task being worked on
+	curDesc    string
+	doneBlock  map[string]string    // uuid→desc marked done during this focus block
+	links      map[string]taskLink  // local pomodoro credits, persisted
+	taskErr    string
+	input      bool
+	inputKind  inputKind
+	inputBuf   string
+	inputUUID  string // task being edited
 
 	// audio visualizer
 	audioFlag string // -audio device override (index or name substring)
@@ -177,14 +213,116 @@ func (m *model) startPhase(p phase) {
 	m.status = running
 }
 
+// ── taskwarrior ─────────────────────────────────────────────────────────────
+
+func (m *model) reloadTasks() {
+	ts, err := listTasks()
+	if err != nil {
+		m.taskErr = err.Error()
+		return
+	}
+	m.taskErr = ""
+	m.tasks = ts
+	m.taskCursor = clamp(m.taskCursor, 0, max(0, len(ts)-1))
+}
+
+func (m *model) selectedTask() *twTask {
+	if m.taskCursor >= 0 && m.taskCursor < len(m.tasks) {
+		return &m.tasks[m.taskCursor]
+	}
+	return nil
+}
+
+func (m *model) handleTaskKey(msg tea.KeyMsg) {
+	switch msg.String() {
+	case "q", "esc", "t":
+		m.view = viewTimer
+	case "up", "k":
+		if m.taskCursor > 0 {
+			m.taskCursor--
+		}
+	case "down", "j":
+		if m.taskCursor < len(m.tasks)-1 {
+			m.taskCursor++
+		}
+	case "enter": // set as current task
+		if t := m.selectedTask(); t != nil {
+			m.curUUID, m.curDesc = t.UUID, t.Description
+		}
+	case "d": // mark done
+		if t := m.selectedTask(); t != nil {
+			if err := taskDone(t.UUID); err != nil {
+				m.taskErr = err.Error()
+				return
+			}
+			if m.ph == focus {
+				m.doneBlock[t.UUID] = t.Description
+			}
+			if m.curUUID == t.UUID {
+				m.curUUID, m.curDesc = "", ""
+			}
+			m.reloadTasks()
+		}
+	case "a": // add
+		m.input, m.inputKind, m.inputBuf = true, inputAdd, ""
+	case "e": // edit description/project/tags
+		if t := m.selectedTask(); t != nil {
+			m.input, m.inputKind, m.inputBuf, m.inputUUID = true, inputEdit, t.Description, t.UUID
+		}
+	}
+}
+
+func (m *model) handleInputKey(msg tea.KeyMsg) {
+	switch msg.String() {
+	case "esc":
+		m.input, m.inputBuf = false, ""
+	case "enter":
+		if text := strings.TrimSpace(m.inputBuf); text != "" {
+			var err error
+			if m.inputKind == inputAdd {
+				err = taskAdd(text)
+			} else {
+				err = taskModify(m.inputUUID, text)
+			}
+			if err != nil {
+				m.taskErr = err.Error()
+			} else {
+				m.reloadTasks()
+			}
+		}
+		m.input, m.inputBuf = false, ""
+	case "backspace":
+		if r := []rune(m.inputBuf); len(r) > 0 {
+			m.inputBuf = string(r[:len(r)-1])
+		}
+	default:
+		if len(msg.Runes) > 0 { // printable runes (incl. space)
+			m.inputBuf += string(msg.Runes)
+		}
+	}
+}
+
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 
 	case tea.KeyMsg:
+		if msg.String() == "ctrl+c" {
+			m.stopCapture()
+			m.save()
+			return m, tea.Quit
+		}
+		if m.input {
+			m.handleInputKey(msg)
+			return m, nil
+		}
+		if m.view == viewTasks {
+			m.handleTaskKey(msg)
+			return m, nil
+		}
 		switch msg.String() {
-		case "q", "ctrl+c", "esc":
+		case "q", "esc":
 			m.stopCapture()
 			m.save()
 			return m, tea.Quit
@@ -204,6 +342,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "r": // reset current phase
 			m.remaining = m.dur(m.ph)
 			m.status = idle
+		case "t": // toggle task view
+			m.view = viewTasks
+			m.reloadTasks()
 		case "v": // toggle audio visualizer
 			return m, m.toggleAudio()
 		}
@@ -261,9 +402,32 @@ func (m *model) complete() {
 		m.rollDate()
 		m.stats.Total++
 		m.stats.Today++
+		m.creditTasks()
 		m.save()
 	}
 	m.status = completed
+}
+
+// creditTasks awards one pomodoro to the current task plus every task marked
+// done during this focus block, then clears the block set.
+// ponytail: a focus abandoned via skip/reset carries its done set into the next
+// completed focus. Rare; add a clear-on-skip if it ever mis-credits in practice.
+func (m *model) creditTasks() {
+	credited := map[string]string{}
+	if m.curUUID != "" {
+		credited[m.curUUID] = m.curDesc
+	}
+	for uuid, desc := range m.doneBlock {
+		credited[uuid] = desc
+	}
+	for uuid, desc := range credited {
+		l := m.links[uuid]
+		l.Description = desc
+		l.Pomodoros++
+		l.LastWorked = today()
+		m.links[uuid] = l
+	}
+	m.doneBlock = map[string]string{}
 }
 
 // ── rendering ───────────────────────────────────────────────────────────────
@@ -271,6 +435,9 @@ func (m *model) complete() {
 func (m model) View() string {
 	if m.width == 0 {
 		return ""
+	}
+	if m.view == viewTasks {
+		return m.taskView()
 	}
 	base, bright := m.ph.colors()
 	// gentle breathing glow while running; steady otherwise.
@@ -324,9 +491,13 @@ func (m model) View() string {
 	case completed:
 		hint = "space  next"
 	}
-	keys := muted.Render(hint + "   ·   s skip   ·   r reset   ·   v viz   ·   q quit")
+	keys := muted.Render(hint + "   ·   s skip   ·   r reset   ·   t tasks   ·   v viz   ·   q quit")
 
-	parts := []string{title, "", label, "", clock, "", bar}
+	parts := []string{title, "", label}
+	if m.curDesc != "" {
+		parts = append(parts, muted.Render("▸ "+m.curDesc))
+	}
+	parts = append(parts, "", clock, "", bar)
 
 	specRows := clamp(m.height-20, 0, 8)
 	if m.capturing && len(m.levels) > 0 && specRows >= 3 {
@@ -358,6 +529,74 @@ func (m model) audioStatus() string {
 	default:
 		return ""
 	}
+}
+
+// taskView renders the pending-task picker (opened with `t`). The timer keeps
+// ticking underneath; only the rendering swaps.
+func (m model) taskView() string {
+	title := lipgloss.NewStyle().Foreground(lipgloss.Color(colTitle)).Bold(true).Render("T A S K S")
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
+	sel := lipgloss.NewStyle().Foreground(lipgloss.Color("#b4cbff")).Bold(true)
+
+	var rows []string
+	if len(m.tasks) == 0 {
+		rows = append(rows, dim.Render("no pending tasks"))
+	}
+
+	// window the list around the cursor so long lists never overflow the frame.
+	visible := clamp(m.height-10, 3, max(3, len(m.tasks)))
+	start := 0
+	if m.taskCursor >= visible {
+		start = m.taskCursor - visible + 1
+	}
+	end := min(len(m.tasks), start+visible)
+	for i := start; i < end; i++ {
+		t := m.tasks[i]
+		cursor := "  "
+		if i == m.taskCursor {
+			cursor = "▸ "
+		}
+		mark := "  "
+		if t.UUID == m.curUUID {
+			mark = "● "
+		}
+		meta := ""
+		if t.Project != "" {
+			meta += "  " + t.Project
+		}
+		if len(t.Tags) > 0 {
+			meta += "  +" + strings.Join(t.Tags, " +")
+		}
+		if l, ok := m.links[t.UUID]; ok && l.Pomodoros > 0 {
+			meta += fmt.Sprintf("  ●×%d", l.Pomodoros)
+		}
+		style := dim
+		if i == m.taskCursor {
+			style = sel
+		}
+		rows = append(rows, style.Render(cursor+mark+t.Description)+dim.Render(meta))
+	}
+
+	parts := []string{title, "", lipgloss.JoinVertical(lipgloss.Left, rows...)}
+	if m.taskErr != "" {
+		parts = append(parts, "", lipgloss.NewStyle().Foreground(lipgloss.Color("#e06c75")).Render("task: "+m.taskErr))
+	}
+	if m.input {
+		prompt := "add › "
+		if m.inputKind == inputEdit {
+			prompt = "edit › "
+		}
+		parts = append(parts, "", sel.Render(prompt+m.inputBuf+"▌"))
+	} else {
+		parts = append(parts, "", dim.Render("↑/↓ move · enter select · d done · a add · e edit · t/esc back"))
+	}
+
+	body := lipgloss.JoinVertical(lipgloss.Left, parts...)
+	inner := lipgloss.Place(m.width-2, m.height-2, lipgloss.Center, lipgloss.Center, body)
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(colTitle)).
+		Render(inner)
 }
 
 // renderBar draws the elapsed-progress bar with a bright head that sweeps the
@@ -556,22 +795,43 @@ func (m *model) rollDate() {
 	}
 }
 
-func loadStats() stats {
-	s := stats{Date: today()}
+// persisted is the on-disk shape: stats plus local task links.
+type persisted struct {
+	Stats stats               `json:"stats"`
+	Links map[string]taskLink `json:"links"`
+}
+
+func load() (stats, map[string]taskLink) {
 	data, err := os.ReadFile(statePath())
 	if err != nil {
-		return s
+		return stats{Date: today()}, map[string]taskLink{}
 	}
-	_ = json.Unmarshal(data, &s)
+	return decodeState(data)
+}
+
+// decodeState parses the state file, transparently migrating the old
+// stats-only format (bare {total,today,date}) to the current nested shape.
+func decodeState(data []byte) (stats, map[string]taskLink) {
+	s := stats{Date: today()}
+	links := map[string]taskLink{}
+	var p persisted
+	if json.Unmarshal(data, &p) == nil && (p.Stats != (stats{}) || len(p.Links) > 0) {
+		s = p.Stats
+		if p.Links != nil {
+			links = p.Links
+		}
+	} else { // old format: bare stats object
+		_ = json.Unmarshal(data, &s)
+	}
 	if s.Date != today() { // stale day → keep total, reset today
 		s.Date = today()
 		s.Today = 0
 	}
-	return s
+	return s, links
 }
 
 func (m model) save() {
-	data, err := json.MarshalIndent(m.stats, "", "  ")
+	data, err := json.MarshalIndent(persisted{Stats: m.stats, Links: m.links}, "", "  ")
 	if err != nil {
 		return
 	}
@@ -588,11 +848,14 @@ func main() {
 	audio := flag.String("audio", "", "visualizer input device (index or name substring; default: BlackHole, else mic)")
 	flag.Parse()
 
+	st, links := load()
 	m := model{
 		ph:        focus,
 		status:    idle,
 		durations: [3]time.Duration{minutes(*work), minutes(*short), minutes(*long)},
-		stats:     loadStats(),
+		stats:     st,
+		links:     links,
+		doneBlock: map[string]string{},
 		audioFlag: *audio,
 	}
 	m.remaining = m.dur(focus)

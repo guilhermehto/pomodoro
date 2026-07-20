@@ -50,6 +50,52 @@ func TestHexLerp(t *testing.T) {
 	}
 }
 
+func TestCreditTasksCurrentPlusDoneBlock(t *testing.T) {
+	m := model{
+		curUUID:   "a",
+		curDesc:   "A",
+		doneBlock: map[string]string{"b": "B", "a": "A"}, // "a" also current
+		links:     map[string]taskLink{},
+	}
+	m.creditTasks()
+	if got := m.links["a"].Pomodoros; got != 1 { // deduped, not double-counted
+		t.Errorf("a pomodoros=%d want 1", got)
+	}
+	if got := m.links["b"].Pomodoros; got != 1 {
+		t.Errorf("b pomodoros=%d want 1", got)
+	}
+	if len(m.doneBlock) != 0 {
+		t.Errorf("doneBlock not cleared: %v", m.doneBlock)
+	}
+	m.creditTasks() // second focus, current still "a"
+	if got := m.links["a"].Pomodoros; got != 2 {
+		t.Errorf("a pomodoros after 2nd=%d want 2", got)
+	}
+	if got := m.links["b"].Pomodoros; got != 1 {
+		t.Errorf("b pomodoros after 2nd=%d want 1 (b not current)", got)
+	}
+}
+
+func TestDecodeStateMigratesOldFormat(t *testing.T) {
+	old := []byte(`{"total":10,"today":3,"date":"` + today() + `"}`)
+	s, links := decodeState(old)
+	if s.Total != 10 || s.Today != 3 {
+		t.Errorf("old-format stats lost: %+v", s)
+	}
+	if links == nil || len(links) != 0 {
+		t.Errorf("links should be empty non-nil, got %v", links)
+	}
+
+	newFmt := []byte(`{"stats":{"total":5,"today":2,"date":"` + today() + `"},"links":{"u1":{"description":"x","pomodoros":4,"last_worked":"` + today() + `"}}}`)
+	s2, links2 := decodeState(newFmt)
+	if s2.Total != 5 || s2.Today != 2 {
+		t.Errorf("new-format stats wrong: %+v", s2)
+	}
+	if links2["u1"].Pomodoros != 4 {
+		t.Errorf("new-format links wrong: %+v", links2)
+	}
+}
+
 func TestDateRollResetsTodayKeepsTotal(t *testing.T) {
 	m := model{stats: stats{Total: 10, Today: 3, Date: "2000-01-01"}}
 	m.rollDate()
