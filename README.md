@@ -24,6 +24,23 @@ In the task view: `↑`/`↓` move, `enter` set current task, `d` mark done, `a`
 ## Flags
 
 - `-work N` / `-short N` / `-long N` durations in minutes (default 25/5/15). Handy for testing, e.g. `-work 1`.
+- `-block a.com,b.com` sites to block system-wide during focus (persisted; `-block ''` clears).
+- `-setup-block` one-time install of the passwordless hosts-block helper (asks for sudo once).
+
+## Site blocking (macOS)
+
+One-time setup, then set the list:
+
+```
+understory -setup-block                # asks for your sudo password once
+understory -block x.com,reddit.com     # persists as `blocklist` in ~/.understory.json
+```
+
+While a focus session runs those domains are blocked in every browser and app: the app adds `0.0.0.0` entries to `/etc/hosts` (bare and `www.` forms) and flushes DNS, then removes them the moment the focus ends — complete, skip, reset, or quit. Pausing keeps the block. No prompts at focus time, and never run understory itself with sudo.
+
+`-setup-block` installs a root-owned helper at `/usr/local/libexec/understory-block` plus a sudoers rule (`/etc/sudoers.d/understory`, visudo-checked) that lets only your user run only that helper without a password. The helper validates domains itself and can only add/remove its own tagged entries. Uninstall: `sudo rm /etc/sudoers.d/understory /usr/local/libexec/understory-block`.
+
+Caveats: no wildcards — list each subdomain (`old.reddit.com`) explicitly; already-open tabs may live on cached DNS until reloaded. If the app dies mid-focus, leftover entries are cleaned at next launch.
 
 ## Tasks
 
