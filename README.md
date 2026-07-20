@@ -1,6 +1,6 @@
 # understory
 
-A terminal pomodoro timer with Taskwarrior tracking and an audio-reactive spectrum visualizer. Big ASCII clock, classic 25/5/15 cycle, long break every 4 focus sessions. State persists to `~/.understory.json`: stats, task links, the current task, whether the visualizer is on, and any in-flight session - quitting mid-session acts as pause, and the next launch resumes where you left off.
+A terminal pomodoro timer with Taskwarrior tracking and an audio-reactive spectrum visualizer. Big ASCII clock, classic 25/5/15 cycle, long break every 4 focus sessions. State persists to `~/.understory.json`: stats (including the past week of sessions), task links, the current task, whether the visualizer is on, and any in-flight session - quitting mid-session acts as pause, and the next launch resumes where you left off.
 
 ## Build and run
 
@@ -16,6 +16,7 @@ Or `go run .`. No cgo, no setup for the timer itself.
 - `s` skip phase
 - `r` reset phase
 - `t` open the task view
+- `g` weekly activity heatmap - one column per day, one cell per two sessions (half-block for odd counts), 14 tops a day; goal tick at 4, streak counter in the footer
 - `v` toggle the visualizer
 - `q` quit
 

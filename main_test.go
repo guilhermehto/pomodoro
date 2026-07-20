@@ -149,7 +149,7 @@ func TestRestoreSession(t *testing.T) {
 
 func TestDateRollResetsTodayKeepsTotal(t *testing.T) {
 	m := model{stats: stats{Total: 10, Today: 3, Date: "2000-01-01"}}
-	m.rollDate()
+	m.stats.roll()
 	if m.stats.Today != 0 {
 		t.Errorf("today not reset: %d", m.stats.Today)
 	}
@@ -158,5 +158,40 @@ func TestDateRollResetsTodayKeepsTotal(t *testing.T) {
 	}
 	if m.stats.Date != today() {
 		t.Errorf("date not rolled: %s", m.stats.Date)
+	}
+	if m.stats.Week != [6]int{} { // ancient gap: history clears
+		t.Errorf("week not cleared: %v", m.stats.Week)
+	}
+}
+
+func TestWeekRoll(t *testing.T) {
+	day := func(back int) string { return time.Now().AddDate(0, 0, -back).Format("2006-01-02") }
+
+	// same day: no-op
+	s := stats{Today: 3, Date: today(), Week: [6]int{1, 2, 3, 4, 5, 6}}
+	s.roll()
+	if s.Today != 3 || s.Week != [6]int{1, 2, 3, 4, 5, 6} {
+		t.Errorf("same-day roll mutated state: today=%d week=%v", s.Today, s.Week)
+	}
+
+	// one day: today slides into the newest slot
+	s = stats{Today: 4, Date: day(1), Week: [6]int{1, 2, 3, 4, 5, 6}}
+	s.roll()
+	if want := [6]int{2, 3, 4, 5, 6, 4}; s.Week != want || s.Today != 0 {
+		t.Errorf("1-day roll: today=%d week=%v want %v", s.Today, s.Week, want)
+	}
+
+	// three-day gap: two zero rest days follow the carried count
+	s = stats{Today: 4, Date: day(3), Week: [6]int{1, 2, 3, 4, 5, 6}}
+	s.roll()
+	if want := [6]int{4, 5, 6, 4, 0, 0}; s.Week != want {
+		t.Errorf("3-day roll: week=%v want %v", s.Week, want)
+	}
+
+	// week-long gap: everything ages out
+	s = stats{Today: 4, Date: day(9), Week: [6]int{1, 2, 3, 4, 5, 6}}
+	s.roll()
+	if s.Week != [6]int{} {
+		t.Errorf("9-day roll: week=%v want empty", s.Week)
 	}
 }

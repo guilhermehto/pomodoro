@@ -72,7 +72,8 @@ const (
 type stats struct {
 	Total int    `json:"total"`
 	Today int    `json:"today"`
-	Date  string `json:"date"` // YYYY-MM-DD
+	Date  string `json:"date"`           // YYYY-MM-DD
+	Week  [6]int `json:"week,omitempty"` // prior 6 days of sessions, oldest first
 }
 
 // taskLink is the local pomodoro↔task association (never written back to
@@ -88,6 +89,7 @@ type viewMode int
 const (
 	viewTimer viewMode = iota
 	viewTasks
+	viewHeat
 )
 
 type inputKind int
@@ -318,6 +320,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.handleTaskKey(msg)
 			return m, nil
 		}
+		if m.view == viewHeat {
+			switch msg.String() {
+			case "g", "q", "esc":
+				m.view = viewTimer
+			}
+			return m, nil
+		}
 		switch msg.String() {
 		case "q", "esc":
 			m.save()
@@ -342,6 +351,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "t": // toggle task view
 			m.view = viewTasks
 			m.reloadTasks()
+		case "g": // weekly activity heatmap
+			m.view = viewHeat
 		case "v": // toggle audio visualizer
 			return m, m.toggleAudio()
 		}
@@ -349,6 +360,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		t := time.Time(msg)
 		m.frame++
+		m.stats.roll() // live midnight rollover: today slides into the week
 		if m.status == running {
 			if !m.lastTick.IsZero() {
 				m.remaining -= t.Sub(m.lastTick)
@@ -404,7 +416,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *model) complete() {
 	if m.ph == focus {
 		m.cycle++
-		m.rollDate()
+		m.stats.roll()
 		m.stats.Total++
 		m.stats.Today++
 		m.creditTasks()
@@ -443,6 +455,9 @@ func (m model) View() string {
 	}
 	if m.view == viewTasks {
 		return m.taskView()
+	}
+	if m.view == viewHeat {
+		return m.heatView()
 	}
 	base, bright := m.ph.colors()
 	// gentle breathing glow while running; steady otherwise.
@@ -496,7 +511,7 @@ func (m model) View() string {
 	case completed:
 		hint = "space  next"
 	}
-	keys := muted.Render(hint + "   ·   s skip   ·   r reset   ·   t tasks   ·   v viz   ·   q quit")
+	keys := muted.Render(hint + "   ·   s skip   ·   r reset   ·   t tasks   ·   g activity   ·   v viz   ·   q quit")
 
 	parts := []string{title, "", label}
 	if m.curDesc != "" {
@@ -600,6 +615,29 @@ func (m model) taskView() string {
 	}
 
 	body := lipgloss.JoinVertical(lipgloss.Left, parts...)
+	inner := lipgloss.Place(m.width-2, m.height-2, lipgloss.Center, lipgloss.Center, body)
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(colTitle)).
+		Render(inner)
+}
+
+// week is the last 7 days of completed sessions, today last.
+func (m model) week() [7]int {
+	var w [7]int
+	copy(w[:6], m.stats.Week[:])
+	w[6] = m.stats.Today
+	return w
+}
+
+// heatView renders the weekly activity heatmap (opened with `g`). The timer
+// keeps ticking underneath; only the rendering swaps.
+func (m model) heatView() string {
+	title := lipgloss.NewStyle().Foreground(lipgloss.Color(colTitle)).Bold(true).Render("A C T I V I T Y")
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
+	body := lipgloss.JoinVertical(lipgloss.Center,
+		title, "", renderHeatmap(m.week(), m.frame), "",
+		dim.Render("g/esc back"))
 	inner := lipgloss.Place(m.width-2, m.height-2, lipgloss.Center, lipgloss.Center, body)
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -795,12 +833,26 @@ func statePath() string {
 
 func today() string { return time.Now().Format("2006-01-02") }
 
-// rollDate resets the daily counter when the calendar day changes.
-func (m *model) rollDate() {
-	if m.stats.Date != today() {
-		m.stats.Date = today()
-		m.stats.Today = 0
+// roll shifts the daily counter into the week history when the calendar day
+// changes, inserting zero days for any gap; unparseable or week-long gaps
+// clear the history. Total is untouched.
+func (s *stats) roll() {
+	if s.Date == today() {
+		return
 	}
+	gap := 7
+	if old, err := time.Parse("2006-01-02", s.Date); err == nil {
+		now, _ := time.Parse("2006-01-02", today())
+		if d := int(now.Sub(old).Hours() / 24); d >= 1 && d < 7 {
+			gap = d
+		}
+	}
+	for range gap {
+		copy(s.Week[:5], s.Week[1:])
+		s.Week[5] = s.Today
+		s.Today = 0
+	}
+	s.Date = today()
 }
 
 // persisted is the on-disk shape: stats, local task links, any in-flight timer
@@ -847,10 +899,7 @@ func decodeState(data []byte) persisted {
 	if p.Links == nil {
 		p.Links = map[string]taskLink{}
 	}
-	if p.Stats.Date != today() { // stale day → keep total, reset today
-		p.Stats.Date = today()
-		p.Stats.Today = 0
-	}
+	p.Stats.roll() // stale day → today slides into the week, total kept
 	return p
 }
 
