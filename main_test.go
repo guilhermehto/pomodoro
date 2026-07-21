@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"testing"
 	"time"
 )
@@ -73,6 +74,29 @@ func TestCreditTasksCurrentPlusDoneBlock(t *testing.T) {
 	}
 	if got := m.links["b"].Pomodoros; got != 1 {
 		t.Errorf("b pomodoros after 2nd=%d want 1 (b not current)", got)
+	}
+}
+
+func TestTaskReconcile(t *testing.T) {
+	cases := []struct {
+		name      string
+		active    []string
+		target    string
+		wantStop  []string
+		wantStart bool
+	}{
+		{"first selection, nothing active", nil, "b", nil, true},
+		{"switch from one active", []string{"a"}, "b", []string{"a"}, true},
+		{"reselect already-active is a no-op", []string{"b"}, "b", nil, false},
+		{"drift: stop every stray active", []string{"a", "c"}, "b", []string{"a", "c"}, true},
+		{"target active alongside a stray", []string{"a", "b"}, "b", []string{"a"}, false},
+	}
+	for _, c := range cases {
+		stop, start := taskReconcile(c.active, c.target)
+		if start != c.wantStart || !slices.Equal(stop, c.wantStop) {
+			t.Errorf("%s: taskReconcile(%v,%q)=(%v,%v) want (%v,%v)",
+				c.name, c.active, c.target, stop, start, c.wantStop, c.wantStart)
+		}
 	}
 }
 

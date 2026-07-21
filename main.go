@@ -229,6 +229,32 @@ func (m *model) reloadTasks() {
 	m.taskCursor = clamp(m.taskCursor, 0, max(0, len(ts)-1))
 }
 
+// setCurrent switches the actively-tracked task, mirroring the change into
+// Taskwarrior so its active timer reflects the selection: stop whatever TW
+// currently has running (except the pick) and start the pick if it isn't
+// already. Reading TW's real active set heals drift from a prior quit that left
+// a different task active.
+func (m *model) setCurrent(uuid, desc string) {
+	active, err := activeTasks()
+	if err != nil {
+		m.taskErr = err.Error()
+		return
+	}
+	stop, start := taskReconcile(active, uuid)
+	for _, u := range stop {
+		if err := taskStop(u); err != nil {
+			m.taskErr = err.Error()
+		}
+	}
+	if start {
+		if err := taskStart(uuid); err != nil {
+			m.taskErr = err.Error()
+			return
+		}
+	}
+	m.curUUID, m.curDesc = uuid, desc
+}
+
 func (m *model) selectedTask() *twTask {
 	if m.taskCursor >= 0 && m.taskCursor < len(m.tasks) {
 		return &m.tasks[m.taskCursor]
@@ -250,7 +276,7 @@ func (m *model) handleTaskKey(msg tea.KeyMsg) {
 		}
 	case "enter": // set as current task
 		if t := m.selectedTask(); t != nil {
-			m.curUUID, m.curDesc = t.UUID, t.Description
+			m.setCurrent(t.UUID, t.Description)
 		}
 	case "d": // mark done
 		if t := m.selectedTask(); t != nil {

@@ -47,7 +47,7 @@ Caveats: no wildcards — list each subdomain (`old.reddit.com`) explicitly; alr
 
 Needs the `task` CLI (`brew install task`). The task view lists your pending tasks by urgency. Pick one as the current task, mark tasks done, add new ones, edit description/project/tags.
 
-Each completed focus session credits one pomodoro to the current task plus anything you marked done that session, stored locally in `~/.understory.json`. Nothing is written back to Taskwarrior except the done/add/edit actions you take yourself.
+Each completed focus session credits one pomodoro to the current task plus anything you marked done that session, stored locally in `~/.understory.json`. Setting a current task starts it in Taskwarrior (`task start`) and stops any other active task, so TW's active timer follows your selection; otherwise nothing is written back except the done/add/edit actions you take yourself.
 
 ## Visualizer (macOS 14.4+)
 
