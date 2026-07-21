@@ -559,7 +559,9 @@ func (m model) View() string {
 	}
 	parts = append(parts, "", bar)
 
-	specRows := clamp(m.height-20, 0, 8)
+	// 23 = the view's fixed rows (title through key hints, plus border);
+	// oversizing here used to clip the top of the view on short terminals.
+	specRows := clamp(m.height-23, 0, 8)
 	if m.capturing && len(m.levels) > 0 && specRows >= 3 {
 		cols := clamp(m.width-8, 16, 140)
 		parts = append(parts, "", renderSpectrum(m.levels, cols, specRows))
