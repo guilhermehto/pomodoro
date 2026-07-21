@@ -4,7 +4,7 @@
   <img src="demo.gif" alt="understory — focus timer with audio-reactive spectrum visualizer" width="800">
 </p>
 
-A terminal pomodoro timer with Taskwarrior tracking and an audio-reactive spectrum visualizer. Big ASCII clock, classic 25/5/15 cycle, long break every 4 focus sessions. State persists to `~/.understory.json`: stats (including the past week of sessions), task links, the current task, whether the visualizer is on, and any in-flight session - quitting mid-session acts as pause, and the next launch resumes where you left off.
+Pomodoro timer with a [Taskwarrior](https://taskwarrior.org/) integration. Block sites during focus sessions. Activity tracker to keep you on your toes. MacOS only for now.
 
 ## Build and run
 
