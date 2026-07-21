@@ -219,3 +219,16 @@ func TestWeekRoll(t *testing.T) {
 		t.Errorf("9-day roll: week=%v want empty", s.Week)
 	}
 }
+
+func TestQuoteRotation(t *testing.T) {
+	t0 := time.Unix(0, 0)
+	if quoteFor(t0) != quoteFor(t0.Add(179*time.Second)) {
+		t.Error("quote changed within a 3-minute window")
+	}
+	if quoteFor(t0) == quoteFor(t0.Add(3*time.Minute)) {
+		t.Error("quote did not rotate after 3 minutes")
+	}
+	if quoteFor(t0.Add(time.Duration(len(quotes))*3*time.Minute)) != quoteFor(t0) {
+		t.Error("rotation did not wrap around")
+	}
+}

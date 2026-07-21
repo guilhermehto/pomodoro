@@ -551,11 +551,13 @@ func (m model) View() string {
 	}
 	keys := muted.Render(hint + "   ·   s skip   ·   r reset   ·   t tasks   ·   g activity   ·   v viz   ·   q quit")
 
-	parts := []string{title, "", label}
+	quote := lipgloss.NewStyle().Foreground(lipgloss.Color(colTitle)).Italic(true).
+		Render(quoteFor(time.Now()))
+	parts := []string{title, quote, "", label, "", clock}
 	if m.curDesc != "" {
-		parts = append(parts, muted.Render("▸ "+m.curDesc))
+		parts = append(parts, "", muted.Render("▸ "+m.curDesc))
 	}
-	parts = append(parts, "", clock, "", bar)
+	parts = append(parts, "", bar)
 
 	specRows := clamp(m.height-20, 0, 8)
 	if m.capturing && len(m.levels) > 0 && specRows >= 3 {
