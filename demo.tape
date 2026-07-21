@@ -21,7 +21,7 @@ Set Height 560
 Set Padding 16
 
 Hide
-Type "export TASKRC=/tmp/demo.taskrc TASKDATA=/tmp/demo-taskdata"
+Type "unset CI NO_COLOR; export COLORTERM=truecolor TASKRC=/tmp/demo.taskrc TASKDATA=/tmp/demo-taskdata"
 Enter
 Type "afplay /tmp/understory-chirp.wav &"
 Enter
