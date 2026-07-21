@@ -17,7 +17,7 @@ Output demo.gif
 
 Set FontSize 16
 Set Width 1120
-Set Height 560
+Set Height 768
 Set Padding 16
 
 Hide
