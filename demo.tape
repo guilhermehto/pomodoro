@@ -15,9 +15,9 @@
 # Audio plays out loud for ~25s.
 Output demo.gif
 
-Set FontSize 16
-Set Width 1120
-Set Height 560
+Set FontSize 15
+Set Width 1280
+Set Height 720
 Set Padding 16
 
 Hide
